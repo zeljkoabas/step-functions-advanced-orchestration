@@ -1,0 +1,247 @@
+{
+    "Comment": "Fetch users, build aggregates, persist to DynamoDB",
+    "QueryLanguage": "JSONata",
+    "StartAt": "Fetch Users",
+    "States": {
+        "Fetch Users": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::http:invoke",
+            "Arguments": {
+                "ApiEndpoint": "https://dummyjson.com/users",
+                "Method": "GET",
+                "Headers": {
+                    "Accept": "application/json"
+                },
+                "InvocationConfig": {
+                    "ConnectionArn": "${ConnectionArn}"
+                }
+            },
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "Fetch Failed"
+                }
+            ],
+            "Next": "Project Users"
+        },
+        "Project Users": {
+            "Type": "Pass",
+            "Output": {
+                "projectedUsers": "{% $map($states.input.ResponseBody.users,function($u){{\"id\":$u.id,\"fullName\":$trim(($exists($u.firstName)?$u.firstName:'')&' '&($exists($u.lastName)?$u.lastName:'')),\"age\":$u.age,\"ageBucket\":$u.age<25?'18-24':($u.age<35?'25-34':($u.age<45?'35-44':($u.age<55?'45-54':'55+'))),\"bloodGroup\":$exists($u.bloodGroup) and $u.bloodGroup!=''?$u.bloodGroup:'UNKNOWN',\"role\":$exists($u.role) and $u.role!=''?$u.role:'unknown',\"email\":$u.email,\"companyName\":$exists($u.company.name) and $u.company.name!=''?$u.company.name:'Unknown Company',\"department\":$exists($u.company.department) and $u.company.department!=''?$u.company.department:'Unknown Department',\"title\":$exists($u.company.title) and $u.company.title!=''?$u.company.title:'Unknown Title',\"companyCity\":$exists($u.company.address.city) and $u.company.address.city!=''?$u.company.address.city:'Unknown City',\"companyCountry\":$exists($u.company.address.country) and $u.company.address.country!=''?$u.company.address.country:'Unknown Country'}}) %}"
+            },
+            "Next": "Build Company Aggregates"
+        },
+        "Build Company Aggregates": {
+            "Type": "Pass",
+            "Output": {
+                "projectedUsers": "{% $states.input.projectedUsers %}",
+                "companyAggregates": "{% ($users := $states.input.projectedUsers; $companies := $distinct($users.companyName); $map($companies,function($company){($groupUsers := $filter($users,function($u){$u.companyName=$company}); {\"pk\":\"COMPANY#\"&$company,\"sk\":\"SUMMARY\",\"aggregateType\":\"COMPANY\",\"companyName\":$company,\"userCount\":$count($groupUsers),\"departments\":$distinct($groupUsers.department),\"titles\":$distinct($groupUsers.title),\"bloodGroups\":$distinct($groupUsers.bloodGroup),\"ageBuckets\":$distinct($groupUsers.ageBucket)})})) %}"
+            },
+            "Next": "Build Age Aggregates"
+        },
+        "Build Age Aggregates": {
+            "Type": "Pass",
+            "Output": {
+                "projectedUsers": "{% $states.input.projectedUsers %}",
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% ($users := $states.input.projectedUsers; $buckets := $distinct($users.ageBucket); $map($buckets,function($bucket){($groupUsers := $filter($users,function($u){$u.ageBucket=$bucket}); {\"pk\":\"AGE_BUCKET#\"&$bucket,\"sk\":\"SUMMARY\",\"aggregateType\":\"AGE_BUCKET\",\"ageBucket\":$bucket,\"userCount\":$count($groupUsers),\"companies\":$distinct($groupUsers.companyName),\"bloodGroups\":$distinct($groupUsers.bloodGroup),\"departments\":$distinct($groupUsers.department)})})) %}"
+            },
+            "Next": "Build Blood Group Aggregates"
+        },
+        "Build Blood Group Aggregates": {
+            "Type": "Pass",
+            "Output": {
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% $states.input.ageAggregates %}",
+                "bloodGroupAggregates": "{% ($users := $states.input.projectedUsers; $groups := $distinct($users.bloodGroup); $map($groups,function($group){($groupUsers := $filter($users,function($u){$u.bloodGroup=$group}); {\"pk\":\"BLOOD_GROUP#\"&$group,\"sk\":\"SUMMARY\",\"aggregateType\":\"BLOOD_GROUP\",\"bloodGroup\":$group,\"userCount\":$count($groupUsers),\"companies\":$distinct($groupUsers.companyName),\"ageBuckets\":$distinct($groupUsers.ageBucket),\"departments\":$distinct($groupUsers.department)})})) %}"
+            },
+            "Next": "Persist Company Aggregates"
+        },
+        "Persist Company Aggregates": {
+            "Type": "Map",
+            "Items": "{% $states.input.companyAggregates %}",
+            "MaxConcurrency": 20,
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "Put Company Aggregate",
+                "States": {
+                    "Put Company Aggregate": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+                        "Arguments": {
+                            "TableName": "user-aggregates",
+                            "Item": {
+                                "pk": {
+                                    "S": "{% $states.input.pk %}"
+                                },
+                                "sk": {
+                                    "S": "{% $states.input.sk %}"
+                                },
+                                "aggregateType": {
+                                    "S": "{% $states.input.aggregateType %}"
+                                },
+                                "name": {
+                                    "S": "{% $states.input.companyName %}"
+                                },
+                                "userCount": {
+                                    "N": "{% $string($states.input.userCount) %}"
+                                },
+                                "payload": {
+                                    "S": "{% $string($states.input) %}"
+                                }
+                            }
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "Persist Failed"
+                }
+            ],
+            "Output": {
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% $states.input.ageAggregates %}",
+                "bloodGroupAggregates": "{% $states.input.bloodGroupAggregates %}"
+            },
+            "Next": "Persist Age Aggregates"
+        },
+        "Persist Age Aggregates": {
+            "Type": "Map",
+            "Items": "{% $states.input.ageAggregates %}",
+            "MaxConcurrency": 20,
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "Put Age Aggregate",
+                "States": {
+                    "Put Age Aggregate": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+                        "Arguments": {
+                            "TableName": "user-aggregates",
+                            "Item": {
+                                "pk": {
+                                    "S": "{% $states.input.pk %}"
+                                },
+                                "sk": {
+                                    "S": "{% $states.input.sk %}"
+                                },
+                                "aggregateType": {
+                                    "S": "{% $states.input.aggregateType %}"
+                                },
+                                "name": {
+                                    "S": "{% $states.input.ageBucket %}"
+                                },
+                                "userCount": {
+                                    "N": "{% $string($states.input.userCount) %}"
+                                },
+                                "payload": {
+                                    "S": "{% $string($states.input) %}"
+                                }
+                            }
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "Persist Failed"
+                }
+            ],
+            "Output": {
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% $states.input.ageAggregates %}",
+                "bloodGroupAggregates": "{% $states.input.bloodGroupAggregates %}"
+            },
+            "Next": "Persist Blood Group Aggregates"
+        },
+        "Persist Blood Group Aggregates": {
+            "Type": "Map",
+            "Items": "{% $states.input.bloodGroupAggregates %}",
+            "MaxConcurrency": 20,
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "Put Blood Group Aggregate",
+                "States": {
+                    "Put Blood Group Aggregate": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+                        "Arguments": {
+                            "TableName": "user-aggregates",
+                            "Item": {
+                                "pk": {
+                                    "S": "{% $states.input.pk %}"
+                                },
+                                "sk": {
+                                    "S": "{% $states.input.sk %}"
+                                },
+                                "aggregateType": {
+                                    "S": "{% $states.input.aggregateType %}"
+                                },
+                                "name": {
+                                    "S": "{% $states.input.bloodGroup %}"
+                                },
+                                "userCount": {
+                                    "N": "{% $string($states.input.userCount) %}"
+                                },
+                                "payload": {
+                                    "S": "{% $string($states.input) %}"
+                                }
+                            }
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "Persist Failed"
+                }
+            ],
+            "Output": {
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% $states.input.ageAggregates %}",
+                "bloodGroupAggregates": "{% $states.input.bloodGroupAggregates %}"
+            },
+            "Next": "Build Final Response"
+        },
+        "Build Final Response": {
+            "Type": "Pass",
+            "Output": {
+                "companyAggregates": "{% $states.input.companyAggregates %}",
+                "ageAggregates": "{% $states.input.ageAggregates %}",
+                "bloodGroupAggregates": "{% $states.input.bloodGroupAggregates %}"
+            },
+            "End": true
+        },
+        "Fetch Failed": {
+            "Type": "Fail",
+            "Error": "FetchUsersFailed",
+            "Cause": "HTTP fetch failed"
+        },
+        "Persist Failed": {
+            "Type": "Fail",
+            "Error": "PersistAggregatesFailed",
+            "Cause": "Writing aggregates to DynamoDB failed"
+        }
+    }
+}

@@ -1,0 +1,129 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Generate Request Id",
+    "States": {
+        "Generate Request Id": {
+            "Type": "Pass",
+            "Output": "{% $merge([$states.input,{\"requestId\": $split($states.context.Execution.Id, ':')[-1]}]) %}",
+            "Next": "Transform Input"
+        },
+        "Transform Input": {
+            "Type": "Pass",
+            "Next": "Choice",
+            "Output": "{% $merge([$states.input,{\"transformed\":{\"customerId\":($states.input.customerId ? $states.input.customerId : 'unknown'),\"fullName\":$trim((($states.input.firstName ? $states.input.firstName : '') & ' ' & ($states.input.lastName ? $states.input.lastName : ''))),\"email\":($states.input.email ? $states.input.email : ''),\"amount\":($states.input.amount ? $states.input.amount : 0),\"currency\":($states.input.currency ? $states.input.currency : 'EUR'),\"country\":($states.input.country ? $states.input.country : 'RS')}}]) %}"
+        },
+        "Choice": {
+            "Type": "Choice",
+            "Default": "Validation Failed",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.transformed.customerId != null and $states.input.transformed.customerId != '' and $states.input.transformed.email != null and $states.input.transformed.email != '' and $states.input.transformed.amount > 0 %}",
+                    "Next": "Enrich Payload"
+                }
+            ]
+        },
+        "Enrich Payload": {
+            "Type": "Pass",
+            "Next": "Build API Request",
+            "Output": "{% $merge([ $states.input, { \"enriched\": {\"segment\": $states.input.transformed.amount > 1000 ? 'premium' : 'standard',\"emailDomain\": $contains($states.input.transformed.email, '@') ? $split($states.input.transformed.email, '@')[-1] : 'unknown',\"region\": $states.input.transformed.country in ['RS','DE','FR','IT','ES'] ? 'EU' : 'OTHER'}}])%}"
+        },
+        "Build API Request": {
+            "Type": "Pass",
+            "Next": "Call HTTPS APIs",
+            "Output": "{% $merge([$states.input, {\"apiRequest\": {\"externalCustomerId\": $states.input.transformed.customerId, \"name\": $states.input.transformed.fullName, \"email\": $states.input.transformed.email, \"transaction\": {\"amount\": $states.input.transformed.amount, \"currency\": $states.input.transformed.currency}, \"metadata\": {\"segment\": $states.input.enriched.segment, \"region\": $states.input.enriched.region, \"emailDomain\": $states.input.enriched.emailDomain}}}]) %}"
+        },
+        "Call HTTPS APIs": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::http:invoke",
+            "Arguments": {
+                "ApiEndpoint": "https://dummyjson.com/users/add",
+                "Method": "POST",
+                "Authentication": {
+                    "ConnectionArn": "${ConnectionArn}"
+                },
+                "Headers": {
+                    "Content-Type": "application/json"
+                },
+                "RequestBody": "{% $states.input.apiRequest %}"
+            },
+            "Output": "{% $merge([$states.input, {\"externalApiResponse\": $states.result}]) %}",
+            "Next": "DynamoDB PutItem"
+        },
+        "DynamoDB PutItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "meetup-demo-results",
+                "Item": {
+                    "requestId": {
+                        "S": "{% $states.input.requestId %}"
+                    },
+                    "customerId": {
+                        "S": "{% $states.input.transformed.customerId %}"
+                    },
+                    "fullName": {
+                        "S": "{% $states.input.transformed.fullName %}"
+                    },
+                    "email": {
+                        "S": "{% $states.input.transformed.email %}"
+                    },
+                    "amount": {
+                        "N": "{% $string($states.input.transformed.amount) %}"
+                    },
+                    "currency": {
+                        "S": "{% $states.input.transformed.currency %}"
+                    },
+                    "country": {
+                        "S": "{% $states.input.transformed.country %}"
+                    },
+                    "segment": {
+                        "S": "{% $states.input.enriched.segment %}"
+                    },
+                    "region": {
+                        "S": "{% $states.input.enriched.region %}"
+                    },
+                    "emailDomain": {
+                        "S": "{% $states.input.enriched.emailDomain %}"
+                    },
+                    "externalCustomerId": {
+                        "S": "{% $states.input.apiRequest.externalCustomerId %}"
+                    },
+                    "apiName": {
+                        "S": "{% $states.input.apiRequest.name %}"
+                    },
+                    "apiEmail": {
+                        "S": "{% $states.input.apiRequest.email %}"
+                    },
+                    "transactionAmount": {
+                        "N": "{% $string($states.input.apiRequest.transaction.amount) %}"
+                    },
+                    "transactionCurrency": {
+                        "S": "{% $states.input.apiRequest.transaction.currency %}"
+                    },
+                    "metadataSegment": {
+                        "S": "{% $states.input.apiRequest.metadata.segment %}"
+                    },
+                    "metadataRegion": {
+                        "S": "{% $states.input.apiRequest.metadata.region %}"
+                    },
+                    "metadataEmailDomain": {
+                        "S": "{% $states.input.apiRequest.metadata.emailDomain %}"
+                    },
+                    "httpStatusCode": {
+                        "N": "{% $string($states.input.externalApiResponse.StatusCode) %}"
+                    },
+                    "finalStatus": {
+                        "S": "completed"
+                    }
+                }
+            },
+            "Output": "{% $merge([$states.input, {\"persistence\": {\"saved\": true, \"recordId\": $states.input.requestId, \"finalStatus\": \"completed\"}}]) %}",
+            "End": true
+        },
+        "Validation Failed": {
+            "Type": "Fail",
+            "Cause": "Validation failed"
+        }
+    },
+    "QueryLanguage": "JSONata"
+}

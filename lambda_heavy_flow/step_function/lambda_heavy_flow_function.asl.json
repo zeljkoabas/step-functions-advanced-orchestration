@@ -1,0 +1,63 @@
+{
+    "Comment": "Meetup demo - Lambda-heavy workflow with OAuth token",
+    "StartAt": "Transform Input",
+    "States": {
+        "Transform Input": {
+            "Type": "Task",
+            "Resource": "${TransformInputFunctionArn}",
+            "Next": "Validate Data"
+        },
+        "Validate Data": {
+            "Type": "Task",
+            "Resource": "${ValidateDataFunctionArn}",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "Validation Failed"
+                }
+            ],
+            "Next": "Enrich Payload"
+        },
+        "Enrich Payload": {
+            "Type": "Task",
+            "Resource": "${EnrichPayloadFunctionArn}",
+            "Next": "Build API Request"
+        },
+        "Build API Request": {
+            "Type": "Task",
+            "Resource": "${BuildApiRequestFunctionArn}",
+            "Next": "Get Bearer Token"
+        },
+        "Get Bearer Token": {
+            "Type": "Task",
+            "Resource": "${GetBearerTokenFunctionArn}",
+            "ResultPath": "$.auth",
+            "Parameters": {
+                "client_id": "demo-client",
+                "client_secret": "demo-secret",
+                "token_url": "https://auth.example.com/oauth/token"
+            },
+            "Next": "Call External API"
+        },
+        "Call External API": {
+            "Type": "Task",
+            "Resource": "${CallExternalApiFunctionArn}",
+            "Parameters": {
+                "data.$": "$",
+                "token.$": "$.auth.access_token"
+            },
+            "Next": "Persist Result"
+        },
+        "Persist Result": {
+            "Type": "Task",
+            "Resource": "${PersistResultFunctionArn}",
+            "End": true
+        },
+        "Validation Failed": {
+            "Type": "Fail",
+            "Cause": "Validation failed"
+        }
+    }
+}

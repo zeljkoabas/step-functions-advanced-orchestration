@@ -1,0 +1,9 @@
+{
+  "customerId": "cust-123",
+  "firstName": "Foo",
+  "lastName": "Bar",
+  "email": "foo.bar@example.com",
+  "amount": 1500,
+  "currency": "EUR",
+  "country": "RS"
+}
