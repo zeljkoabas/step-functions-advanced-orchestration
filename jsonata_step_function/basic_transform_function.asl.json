@@ -1,0 +1,12 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Sort by age",
+    "States": {
+        "Sort by age": {
+            "Type": "Pass",
+            "End": true,
+            "Output": "{% $states.input.data[cars]^(>age)[[0..2]] %}"
+        }
+    },
+    "QueryLanguage": "JSONata"
+}

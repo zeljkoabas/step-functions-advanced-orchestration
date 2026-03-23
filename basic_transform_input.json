@@ -1,0 +1,49 @@
+{
+    "data": [
+        {
+            "name": "Emma",
+            "age": 64,
+            "cars": [
+                "Mercedes-Benz"
+            ]
+        },
+        {
+            "name": "Oliver",
+            "age": 31,
+            "cars": [
+                "Renault",
+                "Seat"
+            ]
+        },
+        {
+            "name": "John",
+            "age": 18,
+            "cars": [
+                "Ford"
+            ]
+        },
+        {
+            "name": "Lily",
+            "age": 42,
+            "motorcycles": [
+                "Honda",
+                "KTM"
+            ]
+        },
+        {
+            "name": "Amelia",
+            "age": 20,
+            "cars": [
+                "Toyota",
+                "Volkswagen"
+            ]
+        },
+        {
+            "name": "George",
+            "age": 56,
+            "cars": [
+                "Volvo"
+            ]
+        }
+    ]
+}
