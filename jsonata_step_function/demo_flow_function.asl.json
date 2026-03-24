@@ -1,0 +1,102 @@
+{
+    "Comment": "Demo flow: normalize, summarize, extract, build payload, send via HTTP",
+    "QueryLanguage": "JSONata",
+    "StartAt": "Normalize Input",
+    "States": {
+        "Normalize Input": {
+            "Type": "Pass",
+            "Output": "{% { 'people': $states.input.data.{ 'name': name, 'age': age, 'ageGroup': age >= 60 ? 'senior' : age >= 30 ? 'adult' : 'young', 'vehicleType': cars ? 'car' : 'motorcycle', 'vehicles': cars ? cars : motorcycles, 'vehicleCount': $count(cars ? cars : motorcycles) } } %}",
+            "Next": "Compute Summary Metrics"
+        },
+        "Compute Summary Metrics": {
+            "Type": "Pass",
+            "Output": "{% ( $people := $states.input.people; $allVehicles := $people.vehicles[]; { 'people': $people, 'summary': { 'totalPeople': $count($people), 'totalVehicles': $count($allVehicles), 'uniqueBrands': $distinct($allVehicles), 'averageAge': $average($people.age), 'multiVehicleOwners': $count($people[vehicleCount > 1]) } } ) %}",
+            "Next": "Extract Interesting People"
+        },
+        "Extract Interesting People": {
+            "Type": "Pass",
+            "Output": "{% ( $people := $states.input.people; { 'people': $people, 'summary': $states.input.summary, 'interestingPeople': $people[vehicleCount > 1 or ageGroup = 'senior' or vehicleType = 'motorcycle'] } ) %}",
+            "Next": "Build Downstream API Payload"
+        },
+        "Build Downstream API Payload": {
+            "Type": "Pass",
+            "Output": "{% { 'people': $states.input.people, 'summary': $states.input.summary, 'interestingPeople': $states.input.interestingPeople, 'apiPayload': { 'reportMetadata': { 'generatedBy': 'step-functions', 'recordCount': $count($states.input.interestingPeople) }, 'summary': $states.input.summary, 'records': $states.input.interestingPeople.{ 'fullName': name, 'age': age, 'category': ageGroup, 'vehicleType': vehicleType, 'vehicleCount': vehicleCount, 'brands': vehicles } } } %}",
+            "Next": "Has Interesting Records?"
+        },
+        "Has Interesting Records?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $count($states.input.apiPayload.records) > 0 %}",
+                    "Next": "Send Report"
+                }
+            ],
+            "Default": "Build Skipped Response"
+        },
+        "Send Report": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::http:invoke",
+            "Arguments": {
+                "ApiEndpoint": "https://dummyjson.com/users/add",
+                "Method": "POST",
+                "Headers": {
+                    "Content-Type": "application/json"
+                },
+                "Authentication": {
+                    "ConnectionArn": "arn:aws:events:eu-west-2:554127190919:connection/dummy_json/68189989-daa9-4cc6-a204-b2e257a88e77"
+                },
+                "RequestBody": "{% $states.input.apiPayload %}"
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.Http.StatusCode.5xx"
+                    ],
+                    "BackoffRate": 2,
+                    "IntervalSeconds": 1,
+                    "MaxAttempts": 3,
+                    "Comment": "HTTP Errors"
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.Http.StatusCode.405",
+                        "States.Http.StatusCode.404"
+                    ],
+                    "Next": "Build Failure Response",
+                    "Comment": "Catch on Status code",
+                    "Output": "{% \n{\n  \"status\": \"FAILED\",\n  \"errorType\": $states.errorOutput.Error,\n  \"rawCause\": $states.errorOutput.Cause\n}\n%}"
+                },
+                {
+                    "ErrorEquals": [
+                        "States.Http.IpError"
+                    ],
+                    "Comment": "Catch on IP Errors",
+                    "Output": {
+                        "Error": "IP Error"
+                    },
+                    "Next": "Build Failure Response"
+                }
+            ],
+            "Output": "{% { 'summary': $states.input.summary, 'apiPayload': $states.input.apiPayload, 'httpResponse': $states.result } %}",
+            "Next": "Build Success Response",
+            "TimeoutSeconds": 30
+        },
+        "Build Success Response": {
+            "Type": "Pass",
+            "Output": "{% { 'status': 'PROCESSED', 'processedRecords': $count($states.input.apiPayload.records), 'brandsProcessed': $count($states.input.summary.uniqueBrands), 'multiVehicleOwners': $states.input.summary.multiVehicleOwners, 'downstreamStatusCode': $states.input.httpResponse.StatusCode, 'summary': $states.input.summary } %}",
+            "End": true
+        },
+        "Build Failure Response": {
+            "Type": "Pass",
+            "Output": "{% $states.input %}",
+            "End": true
+        },
+        "Build Skipped Response": {
+            "Type": "Pass",
+            "Output": "{% { 'status': 'SKIPPED', 'message': 'No interesting records found', 'processedRecords': 0, 'summary': $states.input.summary } %}",
+            "End": true
+        }
+    }
+}
